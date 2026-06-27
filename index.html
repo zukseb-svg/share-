@@ -1,24 +1,22 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>Marine Documents - Dekoder</title>
+    <title>Marine Documents - Odbiór</title>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <style>
         body { font-family: sans-serif; display: flex; flex-direction: column; align-items: center; padding: 20px; background: #f0f2f5; }
         .card { background: white; padding: 24px; border-radius: 16px; box-shadow: 0 4px 15px rgba(0,0,0,0.1); max-width: 600px; width: 100%; text-align: center; }
         .status { padding: 12px; border-radius: 8px; margin: 16px 0; background: #e7f3ff; color: #007bff; font-weight: bold; }
-        .error { background: #fff1f0; color: #d32f2f; padding: 12px; border-radius: 8px; border: 1px solid #ffa39e; font-size: 13px; text-align: left; }
+        .error { background: #fff1f0; color: #d32f2f; padding: 12px; border-radius: 8px; border: 1px solid #ffa39e; font-size: 13px; }
         img { max-width: 100%; border-radius: 12px; margin-top: 16px; box-shadow: 0 2px 8px rgba(0,0,0,0.1); }
-        .debug { font-size: 10px; color: #ccc; margin-top: 20px; word-break: break-all; }
     </style>
 </head>
 <body>
     <div class="card">
         <h2>Marine Documents</h2>
-        <div id="status" class="status">Odszyfrowywanie...</div>
+        <div id="status" class="status">Ładowanie...</div>
         <div id="content"></div>
-        <div id="debug" class="debug"></div>
     </div>
 
 <script>
@@ -30,29 +28,6 @@
         return atob(s);
     }
 
-    async function fetchFile(fileId) {
-        const driveUrl = `https://drive.google.com/uc?id=${fileId}&export=download`;
-        const debug = document.getElementById('debug');
-        
-        // GADGET PROXY od Google - najstabilniejsze na świecie
-        const proxies = [
-            `https://images1-focus-opensocial.googleusercontent.com/gadgets/proxy?container=focus&refresh=604800&url=${encodeURIComponent(driveUrl)}`,
-            `https://api.allorigins.win/raw?url=${encodeURIComponent(driveUrl)}`,
-            `https://corsproxy.io/?${encodeURIComponent(driveUrl)}`
-        ];
-        
-        for (let proxy of proxies) {
-            try {
-                const res = await fetch(proxy);
-                if (res.ok) return await res.arrayBuffer();
-                debug.innerText += `\nFail: ${proxy.substring(0,20)}... Status: ${res.status}`;
-            } catch (e) {
-                debug.innerText += `\nErr: ${proxy.substring(0,20)}... ${e.message}`;
-            }
-        }
-        throw new Error("Wszystkie metody pobierania zawiodły. Sprawdź czy plik jest publiczny na Google Drive.");
-    }
-
     async function start() {
         const status = document.getElementById('status');
         try {
@@ -61,7 +36,7 @@
             const k = params.get('k');
             const f = params.get('f');
 
-            if (!k || !f) throw new Error("Link niekompletny.");
+            if (!k || !f) throw new Error("Link wygasł lub jest niepoprawny.");
 
             const keyRaw = Uint8Array.from(safeAtob(k), c => c.charCodeAt(0));
             const key = await crypto.subtle.importKey("raw", keyRaw, {name: "AES-GCM"}, false, ["decrypt"]);
@@ -69,9 +44,15 @@
             const pages = f.split(',');
             for (let i = 0; i < pages.length; i++) {
                 const [id, ivB64] = pages[i].split(':');
-                status.innerText = `Pobieranie ${i+1}/${pages.length}...`;
+                status.innerText = `Pobieranie strony ${i+1}/${pages.length}...`;
                 
-                const encryptedData = await fetchFile(id);
+                // UŻYWAMY BEZPOŚREDNIEJ DOMENY GOOGLE (bypass CORS/403)
+                const url = `https://lh3.googleusercontent.com/d/${id}`;
+                
+                const res = await fetch(url);
+                if (!res.ok) throw new Error("Google Drive odmówił dostępu (Błąd " + res.status + "). Poczekaj minutę i spróbuj ponownie.");
+                
+                const encryptedData = await res.arrayBuffer();
                 const iv = Uint8Array.from(safeAtob(ivB64), c => c.charCodeAt(0));
                 
                 const decrypted = await crypto.subtle.decrypt(
