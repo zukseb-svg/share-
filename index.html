@@ -1,82 +1,69 @@
-<!DOCTYPE html>
-<html>
-<head>
-    <title>Marine Documents - Dekoder</title>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <style>
-        body { font-family: sans-serif; display: flex; flex-direction: column; align-items: center; padding: 20px; background: #f0f2f5; }
-        .card { background: white; padding: 24px; border-radius: 16px; box-shadow: 0 4px 15px rgba(0,0,0,0.1); max-width: 600px; width: 100%; text-align: center; }
-        .status { padding: 12px; border-radius: 8px; margin: 16px 0; background: #e7f3ff; color: #007bff; }
-        .error { background: #fff1f0; color: #d32f2f; padding: 12px; border-radius: 8px; border: 1px solid #ffa39e; }
-        img { max-width: 100%; border-radius: 12px; margin-top: 16px; box-shadow: 0 2px 8px rgba(0,0,0,0.1); }
-    </style>
-</head>
-<body>
-    <div class="card">
-        <h2>Marine Documents</h2>
-        <div id="status" class="status">Oczekiwanie na dane...</div>
-        <div id="content"></div>
-    </div>
+<!DOCTYPE html> <html> <head> <title>Marine Documents - Dekoder</title> <meta charset="UTF-8"> <meta name="viewport" content="width=device-width, initial-scale=1.0"> <style> body { font-family: sans-serif; display: flex; flex-direction: column; align-items: center; padding: 20px; background: #f0f2f5; } .card { background: white; padding: 24px; border-radius: 16px; box-shadow: 0 4px 15px rgba(0,0,0,0.1); max-width: 600px; width: 100%; text-align: center; } .status { padding: 12px; border-radius: 8px; margin: 16px 0; background: #e7f3ff; color: #007bff; } .error { background: #fff1f0; color: #d32f2f; padding: 12px; border-radius: 8px; border: 1px solid #ffa39e; } img { max-width: 100%; border-radius: 12px; margin-top: 16px; box-shadow: 0 2px 8px rgba(0,0,0,0.1); } </style> </head> <body> <div class="card"> <h2>Marine Documents</h2> <div id="status" class="status">Odszyfrowywanie...</div> <div id="content"></div> </div>
+<script>
+    // Funkcja naprawiająca format Base64 URL-Safe na standardowy
+    function base64UrlToStd(s) {
+        s = s.replace(/-/g, '+').replace(/_/g, '/');
+        while (s.length % 4) s += '=';
+        return s;
+    }
 
-    <script>
-        async function fetchWithRetry(url) {
-            // Próbujemy przez dwa różne serwery proxy, jeśli jeden zawiedzie
-            const proxies = [
-                `https://corsproxy.io/?${encodeURIComponent(url)}`,
-                `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`
-            ];
-            
-            for (let proxy of proxies) {
-                try {
-                    const res = await fetch(proxy);
-                    if (res.ok) return await res.arrayBuffer();
-                } catch (e) { console.warn("Proxy failed:", proxy); }
-            }
-            throw new Error("Nie udało się pobrać pliku. Spróbuj odświeżyć stronę.");
-        }
-
-        async function start() {
-            const status = document.getElementById('status');
+    async function fetchWithRetry(url) {
+        const proxies = [
+            `https://corsproxy.io/?${encodeURIComponent(url)}`,
+            `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`
+        ];
+        for (let proxy of proxies) {
             try {
-                const hash = window.location.hash.substring(1);
-                const params = new URLSearchParams(hash);
-                const keyB64 = params.get('k')?.replace(/\s/g, '+');
-                const fileData = params.get('f');
-
-                if (!keyB64 || !fileData) throw new Error("Błędny link.");
-
-                const keyRaw = Uint8Array.from(atob(keyB64), c => c.charCodeAt(0));
-                const key = await crypto.subtle.importKey("raw", keyRaw, {name: "AES-GCM"}, false, ["decrypt"]);
-
-                const pages = fileData.split(',');
-                for (let i = 0; i < pages.length; i++) {
-                    const [id, ivB64] = pages[i].split(':');
-                    status.innerText = `Pobieranie strony ${i+1}/${pages.length}...`;
-                    
-                    const driveUrl = `https://drive.google.com/uc?export=download&id=${id}`;
-                    const encryptedData = await fetchWithRetry(driveUrl);
-                    
-                    const iv = Uint8Array.from(atob(ivB64.replace(/\s/g, '+')), c => c.charCodeAt(0));
-                    
-                    const decrypted = await crypto.subtle.decrypt(
-                        { name: "AES-GCM", iv: iv, tagLength: 128 },
-                        key,
-                        encryptedData
-                    );
-
-                    const blob = new Blob([decrypted], { type: 'image/jpeg' });
-                    const img = document.createElement('img');
-                    img.src = URL.createObjectURL(blob);
-                    document.getElementById('content').appendChild(img);
-                }
-                status.style.display = 'none';
-            } catch (e) {
-                status.className = 'error';
-                status.innerText = e.message;
-            }
+                const res = await fetch(proxy);
+                if (res.ok) return await res.arrayBuffer();
+            } catch (e) {}
         }
-        start();
-    </script>
-</body>
-</html>
+        throw new Error("Błąd pobierania pliku z chmury.");
+    }
+
+    async function start() {
+        const status = document.getElementById('status');
+        try {
+            const hash = window.location.hash.substring(1);
+            const params = new URLSearchParams(hash);
+            let k = params.get('k');
+            let f = params.get('f');
+
+            if (!k || !f) throw new Error("Link jest niekompletny.");
+
+            // Naprawa klucza
+            const keyRaw = Uint8Array.from(atob(base64UrlToStd(k)), c => c.charCodeAt(0));
+            const key = await crypto.subtle.importKey("raw", keyRaw, {name: "AES-GCM"}, false, ["decrypt"]);
+
+            const pages = f.split(',');
+            for (let i = 0; i < pages.length; i++) {
+                const [id, ivB64] = pages[i].split(':');
+                status.innerText = `Strona ${i+1}/${pages.length}...`;
+                
+                const driveUrl = `https://drive.google.com/uc?export=download&id=${id}`;
+                const encryptedData = await fetchWithRetry(driveUrl);
+                
+                // Naprawa IV
+                const iv = Uint8Array.from(atob(base64UrlToStd(ivB64)), c => c.charCodeAt(0));
+                
+                const decrypted = await crypto.subtle.decrypt(
+                    { name: "AES-GCM", iv: iv, tagLength: 128 },
+                    key,
+                    encryptedData
+                );
+
+                const blob = new Blob([decrypted], { type: 'image/jpeg' });
+                const img = document.createElement('img');
+                img.src = URL.createObjectURL(blob);
+                document.getElementById('content').appendChild(img);
+            }
+            status.style.display = 'none';
+        } catch (e) {
+            console.error(e);
+            status.className = 'error';
+            status.innerText = "Błąd: " + e.message;
+        }
+    }
+    start();
+</script>
+</body> </html>
