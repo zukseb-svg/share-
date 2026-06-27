@@ -1,94 +1,82 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>Marine Documents - Odbiór Dokumentu</title>
+    <title>Marine Documents - Dekoder</title>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <!-- Biblioteka do deszyfrowania -->
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/crypto-js/4.1.1/crypto-js.min.js"></script>
     <style>
-        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; display: flex; flex-direction: column; align-items: center; padding: 20px; background: #f0f2f5; color: #1c1e21; }
-        .card { background: white; padding: 24px; border-radius: 16px; box-shadow: 0 4px 15px rgba(0,0,0,0.08); max-width: 600px; width: 100%; text-align: center; }
-        h2 { color: #007bff; margin-bottom: 8px; }
-        img { max-width: 100%; border-radius: 12px; margin-top: 16px; border: 1px solid #e1e4e8; display: block; margin-left: auto; margin-right: auto; }
-        .status-box { background: #e7f3ff; color: #007bff; padding: 12px; border-radius: 8px; margin: 16px 0; font-size: 14px; }
-        .error { background: #fff1f0; color: #d32f2f; border: 1px solid #ffa39e; padding: 12px; border-radius: 8px; margin: 16px 0; }
-        .instruction { font-size: 13px; color: #65676b; margin-top: 20px; border-top: 1px solid #eee; padding-top: 16px; }
+        body { font-family: sans-serif; display: flex; flex-direction: column; align-items: center; padding: 20px; background: #f0f2f5; }
+        .card { background: white; padding: 24px; border-radius: 16px; box-shadow: 0 4px 15px rgba(0,0,0,0.1); max-width: 600px; width: 100%; text-align: center; }
+        .status { padding: 12px; border-radius: 8px; margin: 16px 0; background: #e7f3ff; color: #007bff; }
+        .error { background: #fff1f0; color: #d32f2f; padding: 12px; border-radius: 8px; border: 1px solid #ffa39e; }
+        img { max-width: 100%; border-radius: 12px; margin-top: 16px; box-shadow: 0 2px 8px rgba(0,0,0,0.1); }
     </style>
 </head>
 <body>
     <div class="card">
         <h2>Marine Documents</h2>
-        <p>Prywatne udostępnianie (Zero Data)</p>
-        
-        <div id="status" class="status-box">Inicjowanie deszyfrowania...</div>
+        <div id="status" class="status">Oczekiwanie na dane...</div>
         <div id="content"></div>
-
-        <div class="instruction">
-            Dane są deszyfrowane lokalnie w Twojej przeglądarce.<br>
-            Nikt poza Tobą nie ma dostępu do treści dokumentu.
-        </div>
     </div>
 
     <script>
-        async function decryptAndShow() {
-            const status = document.getElementById('status');
-            const content = document.getElementById('content');
+        async function fetchWithRetry(url) {
+            // Próbujemy przez dwa różne serwery proxy, jeśli jeden zawiedzie
+            const proxies = [
+                `https://corsproxy.io/?${encodeURIComponent(url)}`,
+                `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`
+            ];
             
+            for (let proxy of proxies) {
+                try {
+                    const res = await fetch(proxy);
+                    if (res.ok) return await res.arrayBuffer();
+                } catch (e) { console.warn("Proxy failed:", proxy); }
+            }
+            throw new Error("Nie udało się pobrać pliku. Spróbuj odświeżyć stronę.");
+        }
+
+        async function start() {
+            const status = document.getElementById('status');
             try {
-                // 1. Odczyt danych z linku
                 const hash = window.location.hash.substring(1);
                 const params = new URLSearchParams(hash);
-                const keyBase64 = params.get('k');
+                const keyB64 = params.get('k')?.replace(/\s/g, '+');
                 const fileData = params.get('f');
-                
-                if (!keyBase64 || !fileData) throw new Error("Nieprawidłowy lub niekompletny link.");
 
-                const files = fileData.split(',').map(f => f.split(':'));
-                
-                // Konwersja klucza z Base64 na format akceptowany przez przeglądarkę
-                const keyRaw = Uint8Array.from(atob(keyBase64), c => c.charCodeAt(0));
-                const key = await crypto.subtle.importKey(
-                    "raw", keyRaw, { name: "AES-GCM" }, false, ["decrypt"]
-                );
+                if (!keyB64 || !fileData) throw new Error("Błędny link.");
 
-                for (let i = 0; i < files.length; i++) {
-                    const [fileId, ivBase64] = files[i];
-                    status.innerText = `Przetwarzanie strony ${i+1}/${files.length}...`;
+                const keyRaw = Uint8Array.from(atob(keyB64), c => c.charCodeAt(0));
+                const key = await crypto.subtle.importKey("raw", keyRaw, {name: "AES-GCM"}, false, ["decrypt"]);
 
-                    // 2. Pobieranie pliku przez PROXY (rozwiązuje błąd Failed to fetch)
-                    const driveUrl = `https://drive.google.com/uc?export=download&id=${fileId}`;
-                    const proxyUrl = `https://corsproxy.io/?${encodeURIComponent(driveUrl)}`;
+                const pages = fileData.split(',');
+                for (let i = 0; i < pages.length; i++) {
+                    const [id, ivB64] = pages[i].split(':');
+                    status.innerText = `Pobieranie strony ${i+1}/${pages.length}...`;
                     
-                    const response = await fetch(proxyUrl);
-                    if (!response.ok) throw new Error("Nie udało się pobrać pliku z Google Drive.");
+                    const driveUrl = `https://drive.google.com/uc?export=download&id=${id}`;
+                    const encryptedData = await fetchWithRetry(driveUrl);
                     
-                    const encryptedBuffer = await response.arrayBuffer();
-                    const iv = Uint8Array.from(atob(ivBase64.replace(/\s/g, '')), c => c.charCodeAt(0));
-
-                    // 3. Deszyfrowanie
+                    const iv = Uint8Array.from(atob(ivB64.replace(/\s/g, '+')), c => c.charCodeAt(0));
+                    
                     const decrypted = await crypto.subtle.decrypt(
                         { name: "AES-GCM", iv: iv, tagLength: 128 },
                         key,
-                        encryptedBuffer
+                        encryptedData
                     );
 
-                    // 4. Wyświetlanie obrazu
                     const blob = new Blob([decrypted], { type: 'image/jpeg' });
-                    const url = URL.createObjectURL(blob);
                     const img = document.createElement('img');
-                    img.src = url;
-                    content.appendChild(img);
+                    img.src = URL.createObjectURL(blob);
+                    document.getElementById('content').appendChild(img);
                 }
-
-                status.style.display = 'none'; // Ukryj status po sukcesie
-            } catch (err) {
-                console.error(err);
+                status.style.display = 'none';
+            } catch (e) {
                 status.className = 'error';
-                status.innerText = "Błąd: " + err.message;
+                status.innerText = e.message;
             }
         }
-        decryptAndShow();
+        start();
     </script>
 </body>
 </html>
