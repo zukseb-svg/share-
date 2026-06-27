@@ -1,99 +1,67 @@
-<!DOCTYPE html>
-<html>
-<head>
-    <title>Marine Documents - Odbiór</title>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <style>
-        body { font-family: sans-serif; display: flex; flex-direction: column; align-items: center; padding: 20px; background: #f0f2f5; }
-        .card { background: white; padding: 24px; border-radius: 16px; box-shadow: 0 4px 15px rgba(0,0,0,0.1); max-width: 600px; width: 100%; text-align: center; }
-        .status { padding: 12px; border-radius: 8px; margin: 16px 0; background: #e7f3ff; color: #007bff; font-weight: bold; }
-        .error { background: #fff1f0; color: #d32f2f; padding: 12px; border-radius: 8px; border: 1px solid #ffa39e; white-space: pre-wrap; font-size: 13px; }
-        img { max-width: 100%; border-radius: 12px; margin-top: 16px; box-shadow: 0 2px 8px rgba(0,0,0,0.1); }
-        .retry-btn { background: #007bff; color: white; border: none; padding: 10px 20px; border-radius: 8px; cursor: pointer; margin-top: 10px; }
-    </style>
-</head>
-<body>
-    <div class="card">
-        <h2>Marine Documents</h2>
-        <div id="status" class="status">Przygotowanie...</div>
-        <div id="content"></div>
-        <button id="retry" class="retry-btn" style="display:none" onclick="location.reload()">Spróbuj ponownie</button>
-    </div>
+<!DOCTYPE html> <html> <head> <title>Marine Documents - Odbiór</title> <meta charset="UTF-8"> <meta name="viewport" content="width=device-width, initial-scale=1.0"> <style> body { font-family: sans-serif; display: flex; flex-direction: column; align-items: center; padding: 20px; background: #f0f2f5; } .card { background: white; padding: 24px; border-radius: 16px; box-shadow: 0 4px 15px rgba(0,0,0,0.1); max-width: 600px; width: 100%; text-align: center; } .status { padding: 12px; border-radius: 8px; margin: 16px 0; background: #e7f3ff; color: #007bff; font-weight: bold; } .error { background: #fff1f0; color: #d32f2f; padding: 12px; border-radius: 8px; border: 1px solid #ffa39e; font-size: 13px; } img { max-width: 100%; border-radius: 12px; margin-top: 16px; box-shadow: 0 2px 8px rgba(0,0,0,0.1); } </style> </head> <body> <div class="card"> <h2>Marine Documents</h2> <div id="status" class="status">Łączenie...</div> <div id="content"></div> </div>
+<script>
+    function safeAtob(s) {
+        s = s.replace(/-/g, '+').replace(/_/g, '/');
+        s = s.replace(/[^A-Za-z0-9+/]/g, "");
+        while (s.length % 4) s += '=';
+        return atob(s);
+    }
 
-    <script>
-        function safeAtob(s) {
+    async function fetchFile(fileId) {
+        // Używamy nowej domeny Google do bezpośredniego pobierania
+        const url = `https://drive.usercontent.google.com/download?id=${fileId}&export=download`;
+        
+        // Próbujemy przez 2 bramki
+        const proxies = [
+            `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`,
+            `https://corsproxy.io/?${encodeURIComponent(url)}`
+        ];
+        
+        for (let proxy of proxies) {
             try {
-                s = s.replace(/-/g, '+').replace(/_/g, '/');
-                s = s.replace(/[^A-Za-z0-9+/]/g, "");
-                while (s.length % 4) s += '=';
-                return atob(s);
-            } catch (e) { throw new Error("Błąd formatu klucza."); }
+                const res = await fetch(proxy);
+                if (res.ok) return await res.arrayBuffer();
+            } catch (e) {}
         }
+        throw new Error("Błąd sieci. Sprawdź połączenie satelitarne.");
+    }
 
-        async function fetchWithRetry(fileId) {
-            const url = `https://drive.google.com/uc?export=download&id=${fileId}`;
-            // Próbujemy przez 3 różne darmowe bramki (proxy)
-            const proxies = [
-                `https://corsproxy.io/?${encodeURIComponent(url)}`,
-                `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`,
-                `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(url)}`
-            ];
-            
-            let lastErr = "";
-            for (let proxy of proxies) {
-                try {
-                    const res = await fetch(proxy);
-                    if (res.ok) return await res.arrayBuffer();
-                    lastErr = `HTTP ${res.status}`;
-                } catch (e) { lastErr = e.message; }
+    async function start() {
+        const status = document.getElementById('status');
+        try {
+            const params = new URLSearchParams(window.location.hash.substring(1));
+            const k = params.get('k');
+            const f = params.get('f');
+
+            if (!k || !f) throw new Error("Link niekompletny.");
+
+            const keyRaw = Uint8Array.from(safeAtob(k), c => c.charCodeAt(0));
+            const key = await crypto.subtle.importKey("raw", keyRaw, {name: "AES-GCM"}, false, ["decrypt"]);
+
+            const pages = f.split(',');
+            for (let i = 0; i < pages.length; i++) {
+                const [id, ivB64] = pages[i].split(':');
+                status.innerText = `Pobieranie ${i+1}/${pages.length}...`;
+                
+                const encryptedData = await fetchFile(id);
+                const iv = Uint8Array.from(safeAtob(ivB64), c => c.charCodeAt(0));
+                
+                const decrypted = await crypto.subtle.decrypt(
+                    { name: "AES-GCM", iv: iv, tagLength: 128 },
+                    key,
+                    encryptedData
+                );
+
+                const img = document.createElement('img');
+                img.src = URL.createObjectURL(new Blob([decrypted], { type: 'image/jpeg' }));
+                document.getElementById('content').appendChild(img);
             }
-            throw new Error(`Nie udało się pobrać pliku z Google Drive (${lastErr}). Upewnij się, że plik jest w pełni zsynchronizowany.`);
+            status.style.display = 'none';
+        } catch (e) {
+            status.className = 'error';
+            status.innerText = e.message;
         }
-
-        async function start() {
-            const status = document.getElementById('status');
-            const retryBtn = document.getElementById('retry');
-            try {
-                const hash = window.location.hash.substring(1);
-                const params = new URLSearchParams(hash);
-                const k = params.get('k');
-                const f = params.get('f');
-
-                if (!k || !f) throw new Error("Link jest nieprawidłowy.");
-
-                const keyStr = safeAtob(k);
-                const keyRaw = Uint8Array.from(keyStr, c => c.charCodeAt(0));
-                const key = await crypto.subtle.importKey("raw", keyRaw, {name: "AES-GCM"}, false, ["decrypt"]);
-
-                const pages = f.split(',');
-                for (let i = 0; i < pages.length; i++) {
-                    const [id, ivB64] = pages[i].split(':');
-                    status.innerText = `Pobieranie i deszyfrowanie ${i+1}/${pages.length}...`;
-                    
-                    const encryptedData = await fetchWithRetry(id);
-                    const ivStr = safeAtob(ivB64);
-                    const iv = Uint8Array.from(ivStr, c => c.charCodeAt(0));
-                    
-                    const decrypted = await crypto.subtle.decrypt(
-                        { name: "AES-GCM", iv: iv, tagLength: 128 },
-                        key,
-                        encryptedData
-                    );
-
-                    const blob = new Blob([decrypted], { type: 'image/jpeg' });
-                    const img = document.createElement('img');
-                    img.src = URL.createObjectURL(blob);
-                    document.getElementById('content').appendChild(img);
-                }
-                status.style.display = 'none';
-            } catch (e) {
-                status.className = 'error';
-                status.innerText = "Błąd: " + e.message;
-                retryBtn.style.display = 'inline-block';
-            }
-        }
-        start();
-    </script>
-</body>
-</html>
+    }
+    start();
+</script>
+</body> </html>
