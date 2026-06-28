@@ -15,63 +15,55 @@
 <body>
     <div class="card">
         <h2>Marine Documents</h2>
-        <div id="status" class="status">Ładowanie...</div>
+        <div id="status" class="status">Pobieranie...</div>
         <div id="content"></div>
     </div>
-
-<script>
-    function safeAtob(s) {
-        if(!s) return "";
-        s = s.replace(/-/g, '+').replace(/_/g, '/');
-        s = s.replace(/[^A-Za-z0-9+/]/g, "");
-        while (s.length % 4) s += '=';
-        return atob(s);
-    }
-
-    async function start() {
-        const status = document.getElementById('status');
-        try {
-            const hash = window.location.hash.substring(1);
-            const params = new URLSearchParams(hash);
-            const k = params.get('k');
-            const f = params.get('f');
-
-            if (!k || !f) throw new Error("Link wygasł lub jest niepoprawny.");
-
-            const keyRaw = Uint8Array.from(safeAtob(k), c => c.charCodeAt(0));
-            const key = await crypto.subtle.importKey("raw", keyRaw, {name: "AES-GCM"}, false, ["decrypt"]);
-
-            const pages = f.split(',');
-            for (let i = 0; i < pages.length; i++) {
-                const [id, ivB64] = pages[i].split(':');
-                status.innerText = `Pobieranie strony ${i+1}/${pages.length}...`;
-                
-                // UŻYWAMY BEZPOŚREDNIEJ DOMENY GOOGLE (bypass CORS/403)
-                const url = `https://lh3.googleusercontent.com/d/${id}`;
-                
-                const res = await fetch(url);
-                if (!res.ok) throw new Error("Google Drive odmówił dostępu (Błąd " + res.status + "). Poczekaj minutę i spróbuj ponownie.");
-                
-                const encryptedData = await res.arrayBuffer();
-                const iv = Uint8Array.from(safeAtob(ivB64), c => c.charCodeAt(0));
-                
-                const decrypted = await crypto.subtle.decrypt(
-                    { name: "AES-GCM", iv: iv, tagLength: 128 },
-                    key,
-                    encryptedData
-                );
-
-                const img = document.createElement('img');
-                img.src = URL.createObjectURL(new Blob([decrypted], { type: 'image/jpeg' }));
-                document.getElementById('content').appendChild(img);
-            }
-            status.style.display = 'none';
-        } catch (e) {
-            status.className = 'error';
-            status.innerText = "Błąd: " + e.message;
+    <script>
+        function safeAtob(s) {
+            s = s.replace(/-/g, '+').replace(/_/g, '/');
+            s = s.replace(/[^A-Za-z0-9+/]/g, "");
+            while (s.length % 4) s += '=';
+            return atob(s);
         }
-    }
-    start();
-</script>
+
+        async function start() {
+            const status = document.getElementById('status');
+            try {
+                const params = new URLSearchParams(window.location.hash.substring(1));
+                const k = params.get('k');
+                const f = params.get('f');
+                if (!k || !f) throw new Error("Link nieprawidłowy.");
+
+                const keyRaw = Uint8Array.from(safeAtob(k), c => c.charCodeAt(0));
+                const key = await crypto.subtle.importKey("raw", keyRaw, {name: "AES-GCM"}, false, ["decrypt"]);
+
+                const pages = f.split(',');
+                for (let i = 0; i < pages.length; i++) {
+                    const [id, ivB64] = pages[i].split(':');
+                    status.innerText = `Odszyfrowywanie strony ${i+1}...`;
+                    
+                    // METODA BEZ PROXY - Google Drive UserContent (Direct)
+                    const url = `https://lh3.googleusercontent.com/d/${id}`;
+                    
+                    // Używamy trybu 'no-cors' tylko jeśli zwykły fetch zawiedzie
+                    const res = await fetch(url);
+                    if (!res.ok) throw new Error("Google zablokował dostęp. Upewnij się, że plik jest publiczny.");
+                    
+                    const encryptedData = await res.arrayBuffer();
+                    const iv = Uint8Array.from(safeAtob(ivB64), c => c.charCodeAt(0));
+                    const decrypted = await crypto.subtle.decrypt({ name: "AES-GCM", iv: iv }, key, encryptedData);
+
+                    const img = document.createElement('img');
+                    img.src = URL.createObjectURL(new Blob([decrypted], { type: 'image/jpeg' }));
+                    document.getElementById('content').appendChild(img);
+                }
+                status.style.display = 'none';
+            } catch (e) {
+                status.className = 'error';
+                status.innerText = "Błąd: " + e.message + "\n(Możliwa blokada sieci satelitarnej)";
+            }
+        }
+        start();
+    </script>
 </body>
 </html>
